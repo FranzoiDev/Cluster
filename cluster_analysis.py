@@ -365,23 +365,18 @@ if __name__ == "__main__":
     manager = ClusterManager()
 
     logger.log("--- Parte 1: Estrutura e Manipulacao K-means ---")
-    # 1.1. Desenvolver uma estrutura de dados (Elemento/Cluster)
-    # 1.2. Indicacao para centroide: Element.is_centroid, Cluster.virtual_centroid_features
-    # 1.3. Estado inicial: Dois clusters cada um com um elemento
     try:
+        # pontos iniciais: [preco_fechamento, volume_diario, dia_do_ano]
         initial_points = [
-            [1.0, 2.0, 3.0], # Elemento para Cluster 1
-            [10.0, 11.0, 12.0]  # Elemento para Cluster 2
+            [45000.0, 2000000000.0, 15.0],  # Ex: Dia 15, Preço $45k, Volume $2Bi
+            [48000.0, 2500000000.0, 30.0]   # Ex: Dia 30, Preço $48k, Volume $2.5Bi
         ]
         manager.create_initial_clusters(initial_points)
         logger.log("Estado Inicial do Cluster:")
         for cid in manager.clusters:
             logger.log(str(manager.get_cluster_details(cid)))
 
-        # 1.4. Insercao de novos registros
-        # 1.5. Remocao de registros
         element_to_remove_id = None
-        # Encontra um elemento para remover
         if manager.clusters:
             first_cluster_id = next(iter(manager.clusters))
             first_cluster_details = manager.get_cluster_details(first_cluster_id)
@@ -392,83 +387,94 @@ if __name__ == "__main__":
             logger.log(f"Tentando remover elemento: {element_to_remove_id}")
             manager.remove_record(element_to_remove_id)
             logger.log(f"Estado do cluster apos remover {element_to_remove_id}:")
-            logger.log(str(manager.get_cluster_details(first_cluster_id)))
+            if first_cluster_id: # Checa se o cluster ainda existe
+                 logger.log(str(manager.get_cluster_details(first_cluster_id)))
+            else:
+                 logger.log(f"Cluster {first_cluster_id} nao encontrado, possivelmente removido.")
+
         else:
             logger.log("Nao foi possivel encontrar um elemento para testar a remocao.")
 
-        # 1.6. Alteracao de registros
         element_to_alter_id = None
         target_cluster_id_for_alter = None
         # Encontra outro elemento para alterar
-        for cid_loop, c_details_loop in manager.get_all_cluster_details().items():
+        all_details = manager.get_all_cluster_details()
+        for cid_loop, c_details_loop in all_details.items():
             if c_details_loop and c_details_loop['elements']:
                 element_to_alter_id = c_details_loop['elements'][0]['id']
                 target_cluster_id_for_alter = cid_loop
                 break
 
         if element_to_alter_id and target_cluster_id_for_alter:
-            new_features_for_alter = [100.0, 101.0, 102.0] # Garantir mesma dimensao
+            # ovas features: [novo_preco, novo_volume, novo_dia_do_ano]
+            new_features_for_alter = [46500.0, 2200000000.0, 20.0]
             logger.log(f"Tentando alterar elemento: {element_to_alter_id} com Caract {new_features_for_alter}")
             manager.alter_record_features(element_to_alter_id, new_features_for_alter)
             logger.log(f"Estado do cluster apos alterar {element_to_alter_id}:")
             logger.log(str(manager.get_cluster_details(target_cluster_id_for_alter)))
         else:
-            logger.log("Nao foi possivel encontrar um elemento para testar a alteracao (talvez todos foram removidos).")
+            logger.log("Nao foi possivel encontrar um elemento para testar a alteracao.")
 
 
     except Exception as e:
-        logger.log(f"Erro durante a demonstracao K-means: {e}", level="ERROR")
+        logger.log(f"Erro durante a demonstracao K-means (Parte 1): {e}", level="ERROR")
+
 
     logger.log("--- Parte 2: Atribuicao de Elementos e Calculo de Distancia ---")
     manager_p2 = ClusterManager()
     try:
+        # pontos iniciais para Parte 2: [preco_fechamento, volume_diario, dia_do_ano]
         initial_points_p2 = [
-            [2.0, 2.0], # Mais prox do cluster 1
-            [8.0, 8.0]  # Mais prox do cluster 2
+            [50000.0, 3000000000.0, 45.0],
+            [55000.0, 4000000000.0, 60.0]
         ]
         manager_p2.create_initial_clusters(initial_points_p2)
         logger.log("Estado inicial para a demonstracao da Parte 2:")
         for cid in manager_p2.clusters:
             logger.log(str(manager_p2.get_cluster_details(cid)))
 
-        # 2.1. Inclusao de novo elemento
-        new_element_data_1 = [3.0, 3.0] # Mais prox do cluster 1
-        new_element_data_2 = [7.0, 7.0] # Mais prox do cluster 2
-        new_element_data_3 = [5.0, 5.0] # Equidistante inicialmente comportamento depende da precisao do float ou desempate
+        new_element_data_1 = [51000.0, 3200000000.0, 48.0]
+        new_element_data_2 = [54000.0, 3800000000.0, 58.0]
+        new_element_data_3 = [52500.0, 3500000000.0, 52.0]
 
-        logger.log(f"Adicionando novo elemento {new_element_data_1}:")
+        logger.log(f"Adicionando novo elemento com features {new_element_data_1}:")
         el1_id, c1_id = manager_p2.add_new_record_to_system(new_element_data_1)
         logger.log(f"Elemento {el1_id} adicionado ao cluster {c1_id}. Detalhes do cluster atualizados:")
         logger.log(str(manager_p2.get_cluster_details(c1_id)))
 
-        logger.log(f"Adicionando novo elemento {new_element_data_2}:")
+        logger.log(f"Adicionando novo elemento com features {new_element_data_2}:")
         el2_id, c2_id = manager_p2.add_new_record_to_system(new_element_data_2)
         logger.log(f"Elemento {el2_id} adicionado ao cluster {c2_id}. Detalhes do cluster atualizados:")
         logger.log(str(manager_p2.get_cluster_details(c2_id)))
 
-        logger.log(f"Adicionando novo elemento {new_element_data_3}:")
+        logger.log(f"Adicionando novo elemento com features {new_element_data_3}:")
         el3_id, c3_id = manager_p2.add_new_record_to_system(new_element_data_3)
         logger.log(f"Elemento {el3_id} adicionado ao cluster {c3_id}. Detalhes do cluster atualizados:")
         logger.log(str(manager_p2.get_cluster_details(c3_id)))
 
-        logger.log("Estado final de todos os clusters:")
+        logger.log("Estado final de todos os clusters (Parte 2):")
         logger.log(str(manager_p2.get_all_cluster_details()))
 
     except Exception as e:
         logger.log(f"Erro durante a demonstracao da Parte 2: {e}", level="ERROR")
 
     logger.log("--- Preparacao KNN ---")
-    current_elements_for_knn = manager_p2.all_elements_map
+    current_elements_for_knn = manager_p2.all_elements_map # Usando os elementos do manager_p2
 
     if current_elements_for_knn:
-        # 1. Normalizar Caract
         normalized_elements = normalize_features_for_knn(current_elements_for_knn)
 
         # 2. Def um ponto alvo para KNN
-        if initial_points_p2:
-            target_knn_point = [4.0] * len(initial_points_p2[0])
-        else: # fallback se initial_points_p2 estava vazio
-            target_knn_point = [4.0,4.0]
+        # [preco, volume, dia_do_ano]
+        target_knn_point = [52000.0, 3300000000.0, 50.0]
+        if not initial_points_p2: # Fallback caso initial_points_p2 esteja vazio por algum motivo
+             if current_elements_for_knn:
+                 any_element_id = next(iter(current_elements_for_knn))
+                 any_element_features = current_elements_for_knn[any_element_id]['element_obj'].features
+                 if any_element_features:
+                    target_knn_point = any_element_features # Usa features de um elemento existente como fallback
+                 else: # Fallback ainda mais generico se o elemento nao tiver features
+                    target_knn_point = [0.0, 0.0, 0.0]
 
 
         # 3. Encontrar K vizinhos mais prox
@@ -480,6 +486,6 @@ if __name__ == "__main__":
         knn_prediction = predict_class_with_knn(neighbors)
         logger.log(f"[KNN Demo] Predicao KNN para {target_knn_point}: {knn_prediction}")
     else:
-        logger.log("[KNN Demo] Nenhum elemento disponivel em manager_p2 para a demonstracao KNN.")
+        logger.log("[KNN Demo] Nenhum elemento disponivel para KNN.")
 
     logger.log("--- Script finalizado ---")
