@@ -1,6 +1,7 @@
 import math
 import uuid
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
+from collections import Counter
 
 class Logger:
     def __init__(self, enabled: bool = True):
@@ -14,32 +15,43 @@ class Logger:
 logger = Logger()
 
 class Element:
-    def __init__(self, features: List[float], element_id: Optional[str] = None):
+    def __init__(self, features: List[float], element_id: Optional[str] = None, categorical_data: Optional[Dict[str, str]] = None):
         if not isinstance(features, list) or not all(isinstance(x, (int, float)) for x in features):
-            raise ValueError("As Caract devem ser uma lista de numeros.")
+            raise ValueError("Features devem ser uma lista de numeros.")
         if not features:
-            raise ValueError("A lista de Caract nao pode estar vazia.")
+            raise ValueError("A lista de features nao pode estar vazia.")
 
         self.id: str = element_id if element_id else str(uuid.uuid4())
         self.features: List[float] = features
         self.is_centroid: bool = False
+        self.categorical_data: Dict[str, str] = categorical_data or {}
 
     def __repr__(self) -> str:
         return f"Element(id={self.id}, features={self.features}, is_centroid={self.is_centroid})"
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"id": self.id, "features": list(self.features), "is_centroid": self.is_centroid}
+        return {
+            "id": self.id,
+            "features": list(self.features),
+            "is_centroid": self.is_centroid,
+            "categorical_data": self.categorical_data
+        }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Element':
-        el = cls(features=data["features"], element_id=data["id"])
+        el = cls(
+            features=data["features"],
+            element_id=data["id"],
+            categorical_data=data.get("categorical_data", {})
+        )
         el.is_centroid = data["is_centroid"]
         return el
 
 class Cluster:
     def __init__(self, cluster_id: str, initial_element_features: List[float]):
         if not initial_element_features:
-            raise ValueError("As Caract do elemento inicial nao podem estar vazias para a criacao do cluster.")
+            raise ValueError("Features do elemento inicial nao podem estar vazias")
+
         self.id: str = cluster_id
         self.elements: List[Element] = []
         self.virtual_centroid_features: List[float] = list(initial_element_features)
@@ -51,7 +63,7 @@ class Cluster:
 
     def _add_element_internal(self, element: Element):
         if not isinstance(element, Element):
-            raise ValueError("Apenas objetos Element podem ser adicionados a um cluster.")
+            raise ValueError("Apenas objetos Element podem ser adicionados")
         self.elements.append(element)
 
     def _recalculate_virtual_centroid(self):
@@ -65,8 +77,6 @@ class Cluster:
 
         sum_features = [0.0] * num_features
         for element in self.elements:
-            if len(element.features) != num_features:
-                raise ValueError("Todos os elementos em um cluster devem ter a mesma dimen de Caract.")
             for i in range(num_features):
                 sum_features[i] += element.features[i]
 
@@ -80,13 +90,12 @@ class Cluster:
             return
 
         closest_element: Optional[Element] = None
-        min_dist_sq = float('inf')
+        min_distance = float('inf')
 
         for element in self.elements:
-            # Usando a distancia euclidiana quadrada para eficiencia na comparacao
-            dist_sq = sum((f1 - f2)**2 for f1, f2 in zip(element.features, self.virtual_centroid_features))
-            if dist_sq < min_dist_sq:
-                min_dist_sq = dist_sq
+            distance = self.euclidean_distance(element.features, self.virtual_centroid_features)
+            if distance < min_distance:
+                min_distance = distance
                 closest_element = element
 
         if closest_element:
@@ -97,96 +106,104 @@ class Cluster:
         self._recalculate_virtual_centroid()
         self._designate_element_as_centroid()
 
-    def add_element(self, element_features: List[float]) -> Element:
-        if not self.elements:
-            if not self.virtual_centroid_features:
-                self.virtual_centroid_features = list(element_features)
+    def add_element(self, element_features: List[float], categorical_data: Optional[Dict[str, str]] = None) -> Element:
+        # Permite expansao das dimensoes do cluster para acomodar dados categoricos
+        if self.virtual_centroid_features and len(element_features) > len(self.virtual_centroid_features):
+            diff = len(element_features) - len(self.virtual_centroid_features)
+            self.virtual_centroid_features.extend([0.0] * diff)
 
-        # Garante que o novo elem tenha a mesma dimen do centroide virtual
-        if self.virtual_centroid_features and len(element_features) != len(self.virtual_centroid_features):
-            raise ValueError(f"A dimensao das Caract do novo elemento {len(element_features)} nao corresponde a dimensao do centroide do cluster {len(self.virtual_centroid_features)}.")
+            for existing_element in self.elements:
+                if len(existing_element.features) < len(element_features):
+                    existing_diff = len(element_features) - len(existing_element.features)
+                    existing_element.features.extend([0.0] * existing_diff)
 
-        new_element = Element(features=element_features)
-        new_element.is_centroid = False
+        new_element = Element(features=element_features, categorical_data=categorical_data)
         self._add_element_internal(new_element)
         self._update_centroids()
         return new_element
 
     def remove_element(self, element_id: str) -> bool:
-        # Remove um elemento do cluster pelo seu ID
         element_to_remove = next((el for el in self.elements if el.id == element_id), None)
-
         if element_to_remove:
             self.elements.remove(element_to_remove)
-            self._update_centroids() # Recalcular mesmo que o cluster fique vazio
+            self._update_centroids()
             return True
-        return False # Elemento nao encontrado
+        return False
 
     def update_element_features(self, element_id: str, new_features: List[float]) -> bool:
-        # Atualiza as caract de um elem existente no cluster
-        if not isinstance(new_features, list) or not all(isinstance(x, (int, float)) for x in new_features):
-            raise ValueError("As novas Caract devem ser uma lista de numeros.")
-
         found_element = next((el for el in self.elements if el.id == element_id), None)
-
         if found_element:
             if len(found_element.features) != len(new_features):
-                raise ValueError("As novas Caract devem ter a mesma dimen das Caract antigas.")
+                raise ValueError("Dimensoes incompativeis")
             found_element.features = new_features
             self._update_centroids()
             return True
-        return False # Elemento nao encontrado
+        return False
 
     def get_elements_data(self) -> List[Dict[str, Any]]:
-        # Retorna uma lista de dicionarios representando os elem no cluster
         return [el.to_dict() for el in self.elements]
 
     def get_virtual_centroid_features(self) -> List[float]:
-        # Retorna uma copia das caracteristicas do centroide virtual do cluster
         return list(self.virtual_centroid_features) if self.virtual_centroid_features else []
+
+    def calculate_dispersion(self) -> float:
+        if not self.elements or not self.virtual_centroid_features:
+            return 0.0
+
+        total_distance = 0.0
+        for element in self.elements:
+            distance = self.euclidean_distance(element.features, self.virtual_centroid_features)
+            total_distance += distance
+
+        return total_distance / len(self.elements)
+
+    def get_distant_elements(self, threshold: float) -> List[Element]:
+        distant_elements = []
+        for element in self.elements:
+            distance = self.euclidean_distance(element.features, self.virtual_centroid_features)
+            if distance > threshold:
+                distant_elements.append(element)
+        return distant_elements
 
     @staticmethod
     def euclidean_distance(features1: List[float], features2: List[float]) -> float:
-        # Calcula a distancia Euclidiana entre dois vetores de caract
-        if not features1 or not features2: # Lida com casos onde um centroide pode estar temp indef
+        if not features1 or not features2:
             return float('inf')
         if len(features1) != len(features2):
-            raise ValueError("As Caract devem ter a mesma dimen para o calculo da distancia.")
+            raise ValueError("Dimensoes incompativeis para calculo de distancia.")
         return math.sqrt(sum((f1 - f2)**2 for f1, f2 in zip(features1, features2)))
 
     def __repr__(self) -> str:
         designated_centroid_id = next((el.id for el in self.elements if el.is_centroid), "Nenhum")
         return (f"Cluster(id={self.id}, num_elements={len(self.elements)}, "
-                f"virtual_centroid_approx={self.virtual_centroid_features}, "
-                f"designated_centroid_element_id={designated_centroid_id})")
-
+                f"virtual_centroid={self.virtual_centroid_features}, "
+                f"designated_centroid_id={designated_centroid_id})")
 
 class ClusterManager:
-    # Geren uma colecao de clusters
-    def __init__(self):
-        self.clusters: Dict[str, Cluster] = {} # id_cluster -> Obj Cluster
-        self.all_elements_map: Dict[str, Dict[str, Any]] = {} # id_elemento -> {'element_obj': Element, 'cluster_id': str}
+    def __init__(self, dispersion_threshold: float = 10.0):
+        self.clusters: Dict[str, Cluster] = {}
+        self.all_elements_map: Dict[str, Dict[str, Any]] = {}
         self._next_cluster_id_counter: int = 0
+        self.dispersion_threshold = dispersion_threshold
+        self.categorical_mappings: Dict[str, Dict[str, float]] = {}
 
     def _generate_cluster_id(self) -> str:
         self._next_cluster_id_counter += 1
         return f"cluster_{self._next_cluster_id_counter}"
 
     def create_initial_clusters(self, initial_element_features_list: List[List[float]]):
-
         # Cria clusters iniciais
 
-        if self.clusters: # Previne reinic se ja estiver populado
-            raise Exception("Clusters iniciais ja foram criados ou o gerenciador nao esta vazio.")
+        if self.clusters:
+            raise Exception("Clusters iniciais já foram criados.")
         if not initial_element_features_list:
-            raise ValueError("E necessario fornecer Caract para pelo menos um elemento inicial.")
+            raise ValueError("É necessário fornecer features para pelo menos um elemento inicial.")
 
         # Verificacao basica de dimen
         if len(initial_element_features_list) > 1:
             first_dim = len(initial_element_features_list[0])
             if not all(len(f) == first_dim for f in initial_element_features_list):
-                raise ValueError("Todas as Caract dos elementos iniciais devem ter a mesma dimen.")
-
+                raise ValueError("Todas as features devem ter a mesma dimensão.")
 
         for features in initial_element_features_list:
             cluster_id = self._generate_cluster_id()
@@ -195,77 +212,149 @@ class ClusterManager:
 
             # O elemento inicial é criado dentro do construtor do cluster
             initial_element = cluster.elements[0]
-            self.all_elements_map[initial_element.id] = {'element_obj': initial_element, 'cluster_id': cluster_id}
+            self.all_elements_map[initial_element.id] = {
+                'element_obj': initial_element,
+                'cluster_id': cluster_id
+            }
 
         logger.log(f"Inicializados {len(self.clusters)} clusters.")
 
-    def add_new_record_to_system(self, new_element_features: List[float]) -> Tuple[str, str]:
+    def add_new_record_to_system(self, new_element_features: List[float],
+                                categorical_data: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
         if not self.clusters:
-            raise Exception("Nenhum cluster existe. Crie clusters iniciais primeiro usando 'create_initial_clusters'.")
+            raise Exception("Nenhum cluster existe. Crie clusters iniciais primeiro")
 
-        any_cluster_id = next(iter(self.clusters))
-        expected_dim = len(self.clusters[any_cluster_id].get_virtual_centroid_features())
-        if len(new_element_features) != expected_dim:
-            raise ValueError(f"A dimensao das Caract do novo elemento {len(new_element_features)} nao corresponde a dimensao esperada pelo sistema {expected_dim}.")
+        processed_features = self._process_categorical_data(new_element_features, categorical_data)
 
+        # Encontra o cluster mais prox
+        closest_cluster_id = self._find_closest_cluster(processed_features)
 
+        if closest_cluster_id:
+            target_cluster = self.clusters[closest_cluster_id]
+            new_element_obj = target_cluster.add_element(processed_features, categorical_data)
+            self.all_elements_map[new_element_obj.id] = {
+                'element_obj': new_element_obj,
+                'cluster_id': target_cluster.id
+            }
+
+            self._check_and_reorganize_clusters()
+
+            logger.log(f"Elemento {new_element_obj.id} adicionado ao cluster {target_cluster.id}.")
+            return new_element_obj.id, target_cluster.id
+        else:
+            raise Exception("Nao foi possivel encontrar o cluster mais proximo")
+
+    def _find_closest_cluster(self, element_features: List[float]) -> Optional[str]:
         closest_cluster_id: Optional[str] = None
         min_distance = float('inf')
 
         for cid, cluster_obj in self.clusters.items():
-            # Distancia ao centroide VIRTUAL do cluster
-            distance = Cluster.euclidean_distance(new_element_features, cluster_obj.get_virtual_centroid_features())
+            centroid_features = cluster_obj.get_virtual_centroid_features()
+
+            # Ajusta as dimensoes se necessario
+            if len(element_features) > len(centroid_features):
+                comparison_features = element_features[:len(centroid_features)]
+            else:
+                comparison_features = element_features
+
+            distance = Cluster.euclidean_distance(
+                comparison_features,
+                centroid_features
+            )
             if distance < min_distance:
                 min_distance = distance
                 closest_cluster_id = cid
 
-        if closest_cluster_id:
-            target_cluster = self.clusters[closest_cluster_id]
-            new_element_obj = target_cluster.add_element(new_element_features) # Adiciona e atualiza centroides dentro do cluster
-            self.all_elements_map[new_element_obj.id] = {'element_obj': new_element_obj, 'cluster_id': target_cluster.id}
-            logger.log(f"Elemento {new_element_obj.id} adicionado ao cluster {target_cluster.id}.")
-            return new_element_obj.id, target_cluster.id
-        else:
-            raise Exception("Nao foi possivel encontrar o cluster mais proximo. Certifique-se de que os clusters estao inicializados corretamente e as Caract sao validas.")
+        return closest_cluster_id
+
+    def _check_and_reorganize_clusters(self):
+        clusters_to_reorganize = []
+
+        for cluster_id, cluster in self.clusters.items():
+            dispersion = cluster.calculate_dispersion()
+            if dispersion > self.dispersion_threshold:
+                distant_elements = cluster.get_distant_elements(self.dispersion_threshold)
+                if len(distant_elements) >= 2:
+                    clusters_to_reorganize.append((cluster_id, distant_elements))
+
+        # Reorganiza clusters com alta dispersao
+        for cluster_id, distant_elements in clusters_to_reorganize:
+            self._create_new_cluster_from_distant_elements(cluster_id, distant_elements)
+
+    def _create_new_cluster_from_distant_elements(self, original_cluster_id: str, distant_elements: List[Element]):
+        if not distant_elements:
+            return
+
+        original_cluster = self.clusters[original_cluster_id]
+        for element in distant_elements:
+            original_cluster.remove_element(element.id)
+            del self.all_elements_map[element.id]
+
+        new_cluster_id = self._generate_cluster_id()
+        first_element = distant_elements[0]
+        new_cluster = Cluster(cluster_id=new_cluster_id, initial_element_features=first_element.features)
+
+        new_cluster.elements.clear()
+
+        # Adiciona todos os elementos distantes ao novo cluster
+        for element in distant_elements:
+            new_cluster._add_element_internal(element)
+            self.all_elements_map[element.id] = {
+                'element_obj': element,
+                'cluster_id': new_cluster_id
+            }
+
+        new_cluster._update_centroids()
+        self.clusters[new_cluster_id] = new_cluster
+
+        logger.log(f"Novo cluster {new_cluster_id} criado com {len(distant_elements)} elementos distantes do cluster {original_cluster_id}.")
+
+    def _process_categorical_data(self, features: List[float],
+                                 categorical_data: Optional[Dict[str, str]] = None) -> List[float]:
+        if not categorical_data:
+            return features
+
+        processed_features = list(features)
+
+        for category, value in categorical_data.items():
+            if category not in self.categorical_mappings:
+                self.categorical_mappings[category] = {}
+
+            if value not in self.categorical_mappings[category]:
+                next_value = len(self.categorical_mappings[category])
+                self.categorical_mappings[category][value] = float(next_value)
+
+            processed_features.append(self.categorical_mappings[category][value])
+
+        return processed_features
 
     def remove_record(self, element_id: str) -> bool:
         if element_id not in self.all_elements_map:
-            logger.log(f"Elemento com ID {element_id} nao encontrado no sistema.")
+            logger.log(f"Elemento {element_id} nao encontrado.")
             return False
 
         record_info = self.all_elements_map[element_id]
         cluster_id = record_info['cluster_id']
         cluster = self.clusters.get(cluster_id)
 
-        if cluster:
-            if cluster.remove_element(element_id):
-                del self.all_elements_map[element_id]
-                logger.log(f"Elemento {element_id} removido do cluster {cluster_id}.")
-                if not cluster.elements:
-                    pass
-                return True
-        logger.log(f"Falha ao remover o elemento {element_id} do cluster {cluster_id} (elemento nao esta no cluster ou cluster nao encontrado).")
+        if cluster and cluster.remove_element(element_id):
+            del self.all_elements_map[element_id]
+            logger.log(f"Elemento {element_id} removido do cluster {cluster_id}.")
+            return True
         return False
 
     def alter_record_features(self, element_id: str, new_features: List[float]) -> bool:
         if element_id not in self.all_elements_map:
-            logger.log(f"Elemento com ID {element_id} nao encontrado para alteracao.")
+            logger.log(f"Elemento {element_id} não encontrado.")
             return False
 
         record_info = self.all_elements_map[element_id]
         cluster_id = record_info['cluster_id']
         cluster = self.clusters.get(cluster_id)
 
-        if cluster:
-            # Verificacao de dimen para novas Caract
-            expected_dim = len(cluster.get_virtual_centroid_features())
-            if expected_dim > 0 and len(new_features) != expected_dim : # expected_dim pode ser 0 se o cluster ficou vazio
-                 raise ValueError(f"A dimensao das novas Caract {len(new_features)} nao corresponde a dimensao esperada pelo cluster {expected_dim}.")
-
-            if cluster.update_element_features(element_id, new_features):
-                logger.log(f"Caract do elemento {element_id} no cluster {cluster_id} atualizadas.")
-                return True
-        logger.log(f"Falha ao atualizar Caract para o elemento {element_id}.")
+        if cluster and cluster.update_element_features(element_id, new_features):
+            logger.log(f"Features do elemento {element_id} atualizadas.")
+            return True
         return False
 
     def get_cluster_details(self, cluster_id: str) -> Optional[Dict[str, Any]]:
@@ -275,7 +364,8 @@ class ClusterManager:
                 "id": cluster.id,
                 "virtual_centroid_features": cluster.get_virtual_centroid_features(),
                 "elements": cluster.get_elements_data(),
-                "designated_centroid_id": next((el.id for el in cluster.elements if el.is_centroid), None)
+                "designated_centroid_id": next((el.id for el in cluster.elements if el.is_centroid), None),
+                "dispersion": cluster.calculate_dispersion()
             }
         return None
 
@@ -292,200 +382,169 @@ class ClusterManager:
             }
         return None
 
-#TODO --- Prep KNN (TERMINAR) ---
-
 def normalize_features_for_knn(elements_map: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    logger.log("[KNN Em Progresso] normalize_features_for_knn: Normalizacao de Caract a implementar.")
-    return elements_map
+    if not elements_map:
+        return elements_map
+
+    # Coleta todas as features para normalizaçao
+    all_features = []
+    for data in elements_map.values():
+        element_obj = data['element_obj']
+        all_features.append(element_obj.features)
+
+    if not all_features:
+        return elements_map
+
+    # Calcula min e max para cada dimensao
+    num_features = len(all_features[0])
+    min_vals = [float('inf')] * num_features
+    max_vals = [float('-inf')] * num_features
+
+    for features in all_features:
+        for i, val in enumerate(features):
+            min_vals[i] = min(min_vals[i], val)
+            max_vals[i] = max(max_vals[i], val)
+
+    normalized_map = {}
+    for el_id, data in elements_map.items():
+        element_obj = data['element_obj']
+        normalized_features = []
+
+        for i, val in enumerate(element_obj.features):
+            if max_vals[i] != min_vals[i]:
+                normalized_val = (val - min_vals[i]) / (max_vals[i] - min_vals[i])
+            else:
+                normalized_val = 0.0
+            normalized_features.append(normalized_val)
+
+        normalized_element = Element(
+            features=normalized_features,
+            element_id=element_obj.id,
+            categorical_data=element_obj.categorical_data
+        )
+        normalized_element.is_centroid = element_obj.is_centroid
+
+        normalized_map[el_id] = {
+            'element_obj': normalized_element,
+            'cluster_id': data['cluster_id']
+        }
+
+    logger.log("Features normalizadas para KNN.")
+    return normalized_map
 
 def find_k_nearest_neighbors(
     all_elements_map: Dict[str, Dict[str, Any]],
     target_features: List[float],
     k: int
 ) -> List[Tuple[str, float, Dict[str, Any]]]:
-    logger.log(f"[KNN Em Progresso] find_k_nearest_neighbors: Procuraria por {k} vizinhos para as Caract {target_features}.")
     if not all_elements_map:
-        logger.log("[KNN Em Progresso] find_k_nearest_neighbors: Nenhum elemento no mapa para pesquisar.")
+        logger.log("Nenhum elemento disponível para KNN.")
         return []
 
-    distances: List[Tuple[str, float, Element]] = [] # (id_elemento, distancia, objeto_elemento)
+    distances: List[Tuple[str, float, Element]] = []
 
-    # Verificacao basica de dimen
+    # Verificacao basica de dimençao
     any_el_data = next(iter(all_elements_map.values()))
     expected_dim = len(any_el_data['element_obj'].features)
     if len(target_features) != expected_dim:
-        logger.log(f"[KNN Em Progresso] find_k_nearest_neighbors: Incompatibilidade na dimensao das Caract alvo. Esperado {expected_dim}, obtido {len(target_features)}.")
+        logger.log(f"Incompatibilidade dimensional: esperado {expected_dim}, obtido {len(target_features)}.")
         return []
 
+    # Calcula distancias
     for el_id, data_dict in all_elements_map.items():
         element_obj: Element = data_dict['element_obj']
         try:
             dist = Cluster.euclidean_distance(target_features, element_obj.features)
             distances.append((el_id, dist, element_obj))
         except ValueError as e:
-            logger.log(f"[KNN Em Progresso] Erro ao calcular distancia para o elemento {el_id}: {e}")
+            logger.log(f"Erro ao calcular distancia para elemento {el_id}: {e}")
             continue
 
     distances.sort(key=lambda x: x[1])
 
-    # Preparar resultado para corresponder a saida esperada, talvez id_elemento, distancia e id_cluster do vizinho
+    # Prepara resultado
     results: List[Tuple[str, float, Dict[str, Any]]] = []
     for el_id, dist, el_obj in distances[:k]:
         neighbor_info = {
             'element_id': el_id,
             'features': el_obj.features,
-            'cluster_id': all_elements_map[el_id]['cluster_id']
+            'cluster_id': all_elements_map[el_id]['cluster_id'],
+            'categorical_data': el_obj.categorical_data
         }
         results.append((el_id, dist, neighbor_info))
 
-    logger.log(f"[KNN Em Progresso] find_k_nearest_neighbors: Encontrados {len(results)} vizinhos potenciais.")
+    logger.log(f"Encontrados {len(results)} vizinhos mais próximos.")
     return results
 
 def predict_class_with_knn(k_nearest_neighbors_info: List[Tuple[str, float, Dict[str, Any]]]) -> Optional[str]:
-
-    logger.log(f"[KNN Em Progresso] predict_class_with_knn: Faria a predicao com base em {len(k_nearest_neighbors_info)} vizinhos.")
     if not k_nearest_neighbors_info:
         return None
 
-    from collections import Counter
     neighbor_cluster_ids = [info_tuple[2]['cluster_id'] for info_tuple in k_nearest_neighbors_info if info_tuple[2]]
     if not neighbor_cluster_ids:
-        logger.log("[KNN Em Progresso] predict_class_with_knn: Nenhum ID de cluster encontrado entre os vizinhos.")
+        logger.log("Nenhum cluster ID encontrado entre os vizinhos.")
         return None
 
     majority_vote = Counter(neighbor_cluster_ids).most_common(1)
     prediction = majority_vote[0][0] if majority_vote else None
-    logger.log(f"[KNN Em Progresso] predict_class_with_knn: A predicao e '{prediction}'.")
+    logger.log(f"Predição KNN: {prediction}")
     return prediction
 
+# Exemplo de uso
+def create_bitcoin_example():
+    logger.log("=== EXEMPLO: Análise de Padrões de Alta do Bitcoin ===")
+
+    manager = ClusterManager(dispersion_threshold=500000000.0)
+
+    initial_bitcoin_data = [
+        [15.0, 2023.0, 45000.0, 2000000000.0],
+        [180.0, 2023.0, 65000.0, 4000000000.0]
+    ]
+
+    manager.create_initial_clusters(initial_bitcoin_data)
+    logger.log("Clusters iniciais criados para análise de Bitcoin:")
+    for cid in manager.clusters:
+        details = manager.get_cluster_details(cid)
+        logger.log(f"  {details}")
+
+    novos_dados = [
+        ([30.0, 2023.0, 47000.0, 2200000000.0], {"tendencia": "alta", "volatilidade": "baixa"}),
+        ([45.0, 2023.0, 48500.0, 2400000000.0], {"tendencia": "alta", "volatilidade": "media"}),
+        ([175.0, 2023.0, 63000.0, 3800000000.0], {"tendencia": "alta", "volatilidade": "alta"}),
+        ([190.0, 2023.0, 67000.0, 4200000000.0], {"tendencia": "alta", "volatilidade": "alta"}),
+        ([200.0, 2023.0, 52000.0, 2800000000.0], {"tendencia": "correcao", "volatilidade": "media"})
+    ]
+
+    logger.log("\nAdicionando novos dados de Bitcoin:")
+    for features, categorical in novos_dados:
+        el_id, cluster_id = manager.add_new_record_to_system(features, categorical)
+        logger.log(f"  Elemento {el_id} -> Cluster {cluster_id}")
+
+    logger.log("\nEstado final dos clusters:")
+    all_details = manager.get_all_cluster_details()
+    for cid, details in all_details.items():
+        if details:
+            logger.log(f"  Cluster {cid}: {details['elements'].__len__()} elementos, dispersão: {details['dispersion']:.2f}")
+
+    logger.log("\n=== Demonstração KNN ===")
+    normalized_elements = normalize_features_for_knn(manager.all_elements_map)
+
+    target_point = [60.0, 2023.0, 50000.0, 2600000000.0, 0.0, 1.0]
+    neighbors = find_k_nearest_neighbors(normalized_elements, target_point, k=3)
+
+    logger.log(f"Vizinhos mais próximos para {target_point[:4]}:")
+    for i, (el_id, dist, info) in enumerate(neighbors):
+        logger.log(f"  {i+1}. Elemento {el_id} (distância: {dist:.4f}) - Cluster: {info['cluster_id']}")
+
+    prediction = predict_class_with_knn(neighbors)
+    logger.log(f"Predição de cluster para novo ponto: {prediction}")
+
+    logger.log("\nMapeamentos categóricos criados:")
+    for category, mapping in manager.categorical_mappings.items():
+        logger.log(f"  {category}: {mapping}")
 
 if __name__ == "__main__":
-    logger.log("--- Script de Clusterizacao K-means e Preparacao KNN ---")
+    # Executa exemplo
+    create_bitcoin_example()
 
-    manager = ClusterManager()
-
-    logger.log("--- Parte 1: Estrutura e Manipulacao K-means ---")
-    try:
-        # pontos iniciais: [preco_fechamento, volume_diario, dia_do_ano]
-        initial_points = [
-            [45000.0, 2000000000.0, 15.0],  # Ex: Dia 15, Preço $45k, Volume $2Bi
-            [48000.0, 2500000000.0, 30.0]   # Ex: Dia 30, Preço $48k, Volume $2.5Bi
-        ]
-        manager.create_initial_clusters(initial_points)
-        logger.log("Estado Inicial do Cluster:")
-        for cid in manager.clusters:
-            logger.log(str(manager.get_cluster_details(cid)))
-
-        element_to_remove_id = None
-        if manager.clusters:
-            first_cluster_id = next(iter(manager.clusters))
-            first_cluster_details = manager.get_cluster_details(first_cluster_id)
-            if first_cluster_details and first_cluster_details['elements']:
-                element_to_remove_id = first_cluster_details['elements'][0]['id']
-
-        if element_to_remove_id:
-            logger.log(f"Tentando remover elemento: {element_to_remove_id}")
-            manager.remove_record(element_to_remove_id)
-            logger.log(f"Estado do cluster apos remover {element_to_remove_id}:")
-            if first_cluster_id: # Checa se o cluster ainda existe
-                 logger.log(str(manager.get_cluster_details(first_cluster_id)))
-            else:
-                 logger.log(f"Cluster {first_cluster_id} nao encontrado, possivelmente removido.")
-
-        else:
-            logger.log("Nao foi possivel encontrar um elemento para testar a remocao.")
-
-        element_to_alter_id = None
-        target_cluster_id_for_alter = None
-        # Encontra outro elemento para alterar
-        all_details = manager.get_all_cluster_details()
-        for cid_loop, c_details_loop in all_details.items():
-            if c_details_loop and c_details_loop['elements']:
-                element_to_alter_id = c_details_loop['elements'][0]['id']
-                target_cluster_id_for_alter = cid_loop
-                break
-
-        if element_to_alter_id and target_cluster_id_for_alter:
-            # ovas features: [novo_preco, novo_volume, novo_dia_do_ano]
-            new_features_for_alter = [46500.0, 2200000000.0, 20.0]
-            logger.log(f"Tentando alterar elemento: {element_to_alter_id} com Caract {new_features_for_alter}")
-            manager.alter_record_features(element_to_alter_id, new_features_for_alter)
-            logger.log(f"Estado do cluster apos alterar {element_to_alter_id}:")
-            logger.log(str(manager.get_cluster_details(target_cluster_id_for_alter)))
-        else:
-            logger.log("Nao foi possivel encontrar um elemento para testar a alteracao.")
-
-
-    except Exception as e:
-        logger.log(f"Erro durante a demonstracao K-means (Parte 1): {e}", level="ERROR")
-
-
-    logger.log("--- Parte 2: Atribuicao de Elementos e Calculo de Distancia ---")
-    manager_p2 = ClusterManager()
-    try:
-        # pontos iniciais para Parte 2: [preco_fechamento, volume_diario, dia_do_ano]
-        initial_points_p2 = [
-            [50000.0, 3000000000.0, 45.0],
-            [55000.0, 4000000000.0, 60.0]
-        ]
-        manager_p2.create_initial_clusters(initial_points_p2)
-        logger.log("Estado inicial para a demonstracao da Parte 2:")
-        for cid in manager_p2.clusters:
-            logger.log(str(manager_p2.get_cluster_details(cid)))
-
-        new_element_data_1 = [51000.0, 3200000000.0, 48.0]
-        new_element_data_2 = [54000.0, 3800000000.0, 58.0]
-        new_element_data_3 = [52500.0, 3500000000.0, 52.0]
-
-        logger.log(f"Adicionando novo elemento com features {new_element_data_1}:")
-        el1_id, c1_id = manager_p2.add_new_record_to_system(new_element_data_1)
-        logger.log(f"Elemento {el1_id} adicionado ao cluster {c1_id}. Detalhes do cluster atualizados:")
-        logger.log(str(manager_p2.get_cluster_details(c1_id)))
-
-        logger.log(f"Adicionando novo elemento com features {new_element_data_2}:")
-        el2_id, c2_id = manager_p2.add_new_record_to_system(new_element_data_2)
-        logger.log(f"Elemento {el2_id} adicionado ao cluster {c2_id}. Detalhes do cluster atualizados:")
-        logger.log(str(manager_p2.get_cluster_details(c2_id)))
-
-        logger.log(f"Adicionando novo elemento com features {new_element_data_3}:")
-        el3_id, c3_id = manager_p2.add_new_record_to_system(new_element_data_3)
-        logger.log(f"Elemento {el3_id} adicionado ao cluster {c3_id}. Detalhes do cluster atualizados:")
-        logger.log(str(manager_p2.get_cluster_details(c3_id)))
-
-        logger.log("Estado final de todos os clusters (Parte 2):")
-        logger.log(str(manager_p2.get_all_cluster_details()))
-
-    except Exception as e:
-        logger.log(f"Erro durante a demonstracao da Parte 2: {e}", level="ERROR")
-
-    logger.log("--- Preparacao KNN ---")
-    current_elements_for_knn = manager_p2.all_elements_map # Usando os elementos do manager_p2
-
-    if current_elements_for_knn:
-        normalized_elements = normalize_features_for_knn(current_elements_for_knn)
-
-        # 2. Def um ponto alvo para KNN
-        # [preco, volume, dia_do_ano]
-        target_knn_point = [52000.0, 3300000000.0, 50.0]
-        if not initial_points_p2: # Fallback caso initial_points_p2 esteja vazio por algum motivo
-             if current_elements_for_knn:
-                 any_element_id = next(iter(current_elements_for_knn))
-                 any_element_features = current_elements_for_knn[any_element_id]['element_obj'].features
-                 if any_element_features:
-                    target_knn_point = any_element_features # Usa features de um elemento existente como fallback
-                 else: # Fallback ainda mais generico se o elemento nao tiver features
-                    target_knn_point = [0.0, 0.0, 0.0]
-
-
-        # 3. Encontrar K vizinhos mais prox
-        k_val = 2
-        neighbors = find_k_nearest_neighbors(normalized_elements, target_knn_point, k_val)
-        logger.log(f"[KNN Demo] Vizinhos encontrados para {target_knn_point} (k={k_val}): {neighbors}")
-
-        # 4. Predizer classe com KNN
-        knn_prediction = predict_class_with_knn(neighbors)
-        logger.log(f"[KNN Demo] Predicao KNN para {target_knn_point}: {knn_prediction}")
-    else:
-        logger.log("[KNN Demo] Nenhum elemento disponivel para KNN.")
-
-    logger.log("--- Script finalizado ---")
+    logger.log("\n=== SCRIPT FINALIZADO ===")
